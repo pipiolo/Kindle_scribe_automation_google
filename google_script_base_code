@@ -1,0 +1,337 @@
+function descargarAdjuntoAmazonPorRemitente() {
+  var nombreCarpetaNotasKS = "Notas KS";
+
+  // Buscar o crear carpeta "Notas KS" solo si no existe
+  var carpetaDestino;
+  var carpetasDestino = DriveApp.getFoldersByName(nombreCarpetaNotasKS);
+  if (carpetasDestino.hasNext()) {
+    carpetaDestino = carpetasDestino.next();
+  } else {
+    carpetaDestino = DriveApp.createFolder(nombreCarpetaNotasKS);
+  }
+
+  // Buscar correos de Amazon no leídos
+  var threads = GmailApp.search('amazon AND is:unread');
+  // Regex mejorado para capturar links de Amazon
+  var regexAmazonPDF = /(https?:\/\/[^\s"']*amazon[^\s"']*\.pdf[^\s"']*|https?:\/\/[^\s"']*aws[^\s"']*\.pdf[^\s"']*|https?:\/\/[^\s"']*s3[^\s"']*\.pdf[^\s"']*)/gi;
+
+  for (var i = 0; i < threads.length; i++) {
+    var mensajes = threads[i].getMessages();
+
+    for (var j = 0; j < mensajes.length; j++) {
+      var mensaje = mensajes[j];
+      var remitente = mensaje.getFrom(); 
+      var asunto = mensaje.getSubject().trim();
+
+      // Verificar que el remitente sea do-not-reply@amazon.com
+      if (!remitente.includes('do-not-reply@amazon.com')) {
+        Logger.log("❌ Remitente no válido: " + remitente + " - Saltando mensaje");
+        continue; // Saltar este mensaje si no es el remitente correcto
+      }
+
+      Logger.log("✅ Remitente válido detectado: " + remitente);
+
+      // Buscar links de Amazon que sean PDF
+      var cuerpo = mensaje.getBody();
+      var links = cuerpo.match(regexAmazonPDF);
+
+      if (links && links.length > 0) {
+        // Eliminar duplicados
+        links = [...new Set(links)];
+        
+        for (var k = 0; k < links.length; k++) {
+          var url = links[k];
+          Logger.log("=== PROCESANDO URL ===");
+          Logger.log("URL original: " + url);
+          
+          try {
+            // PRIMERO: Obtener la URL final del PDF real
+            var resultado = obtenerURLFinalPDF(url);
+            
+            if (resultado.urlFinal && resultado.esPDF) {
+              Logger.log("URL final del PDF: " + resultado.urlFinal);
+              
+              // SEGUNDO: Extraer el nombre REAL del archivo y limpiar fecha
+              var nombreReal = extraerNombreRealDesdeURL(resultado.urlFinal, url);
+              var nombreLimpio = limpiarFechaDelNombre(nombreReal);
+              Logger.log("Nombre original: " + nombreReal);
+              Logger.log("Nombre limpio: " + nombreLimpio);
+              
+              // Descargar el PDF
+              var respuesta = UrlFetchApp.fetch(resultado.urlFinal, {
+                method: 'get',
+                muteHttpExceptions: true,
+                followRedirects: true
+              });
+
+              var code = respuesta.getResponseCode();
+              Logger.log("Código de respuesta: " + code);
+
+              if (code === 200) {
+                var contenido = respuesta.getBlob();
+                
+                // Verificar que sea realmente un PDF
+                if (contenido.getContentType() === 'application/pdf') {
+                  
+                  // Eliminar archivos existentes con el mismo nombre
+                  var archivos = carpetaDestino.getFilesByName(nombreLimpio);
+                  while (archivos.hasNext()) {
+                    var archivo = archivos.next();
+                    try {
+                      Drive.Files.remove(archivo.getId());
+                    } catch (errDel) {
+                      archivo.setTrashed(true);
+                    }
+                  }
+
+                  // Guardar nuevo PDF directamente en "Notas KS"
+                  var archivoGuardado = carpetaDestino.createFile(contenido);
+                  archivoGuardado.setName(nombreLimpio);
+                  Logger.log("✅ DESCARGADO en 'Notas KS': " + nombreLimpio);
+                  
+                } else {
+                  Logger.log("❌ El contenido no es PDF: " + contenido.getContentType());
+                }
+
+              } else {
+                Logger.log("❌ Error HTTP: " + code);
+              }
+
+            } else {
+              Logger.log("❌ No se pudo obtener la URL final del PDF");
+            }
+
+          } catch (e) {
+            Logger.log("❌ Error: " + e.toString());
+          }
+        }
+      } else {
+        Logger.log("No se encontraron links PDF en el mensaje: " + asunto);
+      }
+    }
+
+    // Marcar como leído el hilo
+    threads[i].markRead();
+  }
+}
+
+// NUEVA FUNCIÓN PARA LIMPIAR FECHAS DEL NOMBRE
+function limpiarFechaDelNombre(nombreArchivo) {
+  try {
+    if (!nombreArchivo) return nombreArchivo;
+    
+    Logger.log("Limpiando fecha de: " + nombreArchivo);
+    
+    // Patrones comunes de fechas al final del nombre
+    var patronesFecha = [
+      // Formato: 2025-09-24-15-41 (año-mes-día-hora-minuto)
+      /-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?=\.pdf$)/i,
+      
+      // Formato: 2025-09-24 (año-mes-día)
+      /-\d{4}-\d{2}-\d{2}(?=\.pdf$)/i,
+      
+      // Formato: 20250924-1541 (añomesdía-horaminuto)
+      /-\d{8}-\d{4}(?=\.pdf$)/i,
+      
+      // Formato: 20250924 (añomesdía)
+      /-\d{8}(?=\.pdf$)/i,
+      
+      // Formato: 24092025-1541 (díamesaño-horaminuto)
+      /-\d{8}-\d{4}(?=\.pdf$)/i,
+      
+      // Formato: 24092025 (díamesaño)
+      /-\d{8}(?=\.pdf$)/i,
+      
+      // Formato con guiones bajos: _2025_09_24_15_41
+      /_\d{4}_\d{2}_\d{2}_\d{2}_\d{2}(?=\.pdf$)/i,
+      
+      // Formato con guiones bajos: _2025_09_24
+      /_\d{4}_\d{2}_\d{2}(?=\.pdf$)/i
+    ];
+    
+    var nombreLimpio = nombreArchivo;
+    
+    // Aplicar todos los patrones de fecha
+    for (var i = 0; i < patronesFecha.length; i++) {
+      var patron = patronesFecha[i];
+      if (patron.test(nombreLimpio)) {
+        nombreLimpio = nombreLimpio.replace(patron, '');
+        Logger.log("Eliminada fecha con patrón " + (i + 1) + ": " + nombreLimpio);
+      }
+    }
+    
+    // Limpiar dobles guiones o guiones al final
+    nombreLimpio = nombreLimpio.replace(/-{2,}/g, '-');
+    nombreLimpio = nombreLimpio.replace(/_ {2,}/g, '_');
+    nombreLimpio = nombreLimpio.replace(/[-_]+\.pdf$/i, '.pdf');
+    
+    // Si después de limpiar queda muy corto, mantener el original
+    if (nombreLimpio.length < 5 || nombreLimpio === '.pdf') {
+      Logger.log("Nombre muy corto después de limpiar, manteniendo original");
+      return nombreArchivo;
+    }
+    
+    Logger.log("Nombre final limpio: " + nombreLimpio);
+    return nombreLimpio;
+    
+  } catch (e) {
+    Logger.log("Error limpiando fecha: " + e.toString());
+    return nombreArchivo;
+  }
+}
+
+// FUNCIÓN MEJORADA - USA LA URL FINAL, NO EL ASUNTO
+function extraerNombreRealDesdeURL(urlFinal, urlOriginal) {
+  try {
+    Logger.log("Extrayendo nombre desde URL final: " + urlFinal);
+    
+    // 1. PRIMERO intentar extraer de la URL final del S3
+    var nombreS3 = extraerNombreDeS3URL(urlFinal);
+    if (nombreS3 && nombreS3 !== '.pdf' && !nombreS3.includes('FW_') && !nombreS3.includes('Has enviado')) {
+      Logger.log("Nombre extraído de S3: " + nombreS3);
+      return nombreS3;
+    }
+    
+    // 2. SEGUNDO intentar extraer del parámetro U= de la URL original
+    var matchU = urlOriginal.match(/[&?]U=([^&]+)/i);
+    if (matchU && matchU[1]) {
+      var urlCodificada = matchU[1];
+      var urlDecodificada = decodeURIComponent(urlCodificada);
+      
+      // Si todavía tiene codificación, decodificar otra vez
+      if (urlDecodificada.indexOf('%') !== -1) {
+        urlDecodificada = decodeURIComponent(urlDecodificada);
+      }
+      
+      var nombreU = extraerNombreDeS3URL(urlDecodificada);
+      if (nombreU && nombreU !== '.pdf' && !nombreU.includes('FW_') && !nombreU.includes('Has enviado')) {
+        Logger.log("Nombre extraído de parámetro U: " + nombreU);
+        return nombreU;
+      }
+    }
+    
+    // 3. TERCERO buscar en la URL original
+    var nombreOriginal = extraerNombreDeS3URL(urlOriginal);
+    if (nombreOriginal && nombreOriginal !== '.pdf' && !nombreOriginal.includes('FW_') && !nombreOriginal.includes('Has enviado')) {
+      Logger.log("Nombre extraído de URL original: " + nombreOriginal);
+      return nombreOriginal;
+    }
+    
+    // 4. Si todo falla, usar un nombre genérico basado en fecha/hora
+    var fecha = new Date();
+    var nombreGenerico = "Amazon_Documento_" + 
+                        fecha.getFullYear() + "-" + 
+                        (fecha.getMonth() + 1) + "-" + 
+                        fecha.getDate() + ".pdf";
+    
+    Logger.log("Usando nombre genérico: " + nombreGenerico);
+    return nombreGenerico;
+    
+  } catch (e) {
+    Logger.log("Error extrayendo nombre: " + e.toString());
+    return "Amazon_Documento_" + new Date().getTime() + ".pdf";
+  }
+}
+
+// FUNCIÓN MEJORADA PARA EXTRAER NOMBRE DE URLS S3 (sin cambios)
+function extraerNombreDeS3URL(url) {
+  try {
+    if (!url) return null;
+    
+    Logger.log("Analizando URL S3: " + url);
+    
+    var partes = url.split('/');
+    
+    if (partes.length > 0) {
+      var nombreArchivo = partes[partes.length - 1];
+      nombreArchivo = nombreArchivo.split('?')[0];
+      nombreArchivo = nombreArchivo.split('#')[0];
+      
+      var nombreDecodificado = nombreArchivo;
+      while (nombreDecodificado.indexOf('%') !== -1) {
+        try {
+          nombreDecodificado = decodeURIComponent(nombreDecodificado);
+        } catch (e) {
+          break;
+        }
+      }
+      
+      nombreDecodificado = nombreDecodificado.replace(/[<>:"/\\|?*]/g, "_");
+      
+      if (nombreDecodificado && 
+          nombreDecodificado !== '.pdf' && 
+          nombreDecodificado.length > 4 &&
+          !nombreDecodificado.startsWith('f.') &&
+          !nombreDecodificado.includes('FW_') &&
+          !nombreDecodificado.includes('Has enviado')) {
+        
+        if (!nombreDecodificado.toLowerCase().endsWith('.pdf')) {
+          nombreDecodificado += '.pdf';
+        }
+        
+        Logger.log("Nombre válido extraído: " + nombreDecodificado);
+        return nombreDecodificado;
+      }
+    }
+    
+    return null;
+  } catch (e) {
+    Logger.log("Error en extraerNombreDeS3URL: " + e.toString());
+    return null;
+  }
+}
+
+// FUNCIÓN PARA OBTENER LA URL FINAL DEL PDF (sin cambios)
+function obtenerURLFinalPDF(urlInicial) {
+  try {
+    var urlActual = urlInicial;
+    var maxRedirecciones = 5;
+    var contador = 0;
+    
+    var headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/pdf,*/*'
+    };
+    
+    while (contador < maxRedirecciones) {
+      contador++;
+      Logger.log("Seguimiento redirección " + contador + ": " + urlActual);
+      
+      var respuesta = UrlFetchApp.fetch(urlActual, {
+        method: 'get',
+        headers: headers,
+        followRedirects: false,
+        muteHttpExceptions: true
+      });
+      
+      var code = respuesta.getResponseCode();
+      var headersResp = respuesta.getHeaders();
+      
+      if (code >= 300 && code < 400 && headersResp['Location']) {
+        urlActual = headersResp['Location'];
+        Logger.log("Redirigiendo a: " + urlActual);
+        continue;
+      }
+      
+      if (code >= 200 && code < 300) {
+        var contentType = (headersResp['Content-Type'] || '').toLowerCase();
+        var esPDF = contentType.indexOf('pdf') !== -1 || 
+                   urlActual.toLowerCase().indexOf('.pdf') !== -1;
+        
+        return {
+          urlFinal: urlActual,
+          esPDF: esPDF,
+          contentType: contentType
+        };
+      }
+      
+      break;
+    }
+    
+    return {urlFinal: null, esPDF: false};
+    
+  } catch (e) {
+    Logger.log("Error en seguimiento de redirecciones: " + e.toString());
+    return {urlFinal: null, esPDF: false};
+  }
+}
