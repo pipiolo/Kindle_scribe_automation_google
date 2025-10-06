@@ -1,7 +1,34 @@
 # Kindle_scribe_automation_google
-Automate kindle scribe emails download and archive in googledrive
 
-📧 Automated Amazon PDF Downloader
+Hi all,
+
+I am not developer but I am Kindle Scribe user and I needed to automate notes email download an archive. Here you have a code writen with Deep Seek and Chat GPT help and it works!!!
+
+⚠️ IMPORTANT DISCLAIMER
+
+LEGAL NOTICE: USE AT YOUR OWN RISK
+
+This software is provided "as is", without any warranty of any kind, express or implied. The user assumes all responsibility and risk for the use of this script. I am not responsible for:
+
+· Any data loss or corruption
+· Email processing errors
+· Account suspension or limitations by Google or Amazon
+· Legal implications of automatically downloading documents
+· Security breaches or unauthorized access
+· Any other damages or losses resulting from the use of this script
+
+By using this software, you acknowledge that:
+
+· You have read and understood this disclaimer
+· You assume all responsibility for its use
+· You are solely responsible for complying with Google's Terms of Service
+· You are solely responsible for complying with Amazon's Terms of Service
+· You are responsible for testing the script in a safe environment before production use
+
+CONSULT WITH LEGAL AND IT PROFESSIONALS BEFORE USING THIS SCRIPT IN BUSINESS ENVIRONMENTS
+
+
+📧 Automated Amazon PDF Downloader for Kindle Scribe
 
 Google Apps Script that automatically downloads PDF files from Amazon emails and saves them to Google Drive.
 
